@@ -3,3 +3,5 @@ torchvision>=0.10
 opencv-python>=4.5
 numpy>=1.19
 
+av>=10.0.0
+djitellopy2>=2.5.0
