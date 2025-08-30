@@ -6,6 +6,17 @@ import cv2
 from onvif import ONVIFCamera
 from urllib.parse import urlparse, urlunparse, quote
 
+# Import camera utilities
+from camera_utils import (
+    setup_camera_display,
+    ensure_full_frame_visible,
+    add_camera_info_overlay,
+    draw_motion_contours
+)
+
+# Import motion detection
+from motion_detector import create_motion_detector
+
 
 def discover_rtsp_uri(host: str, port: int, username: str, password: str) -> Optional[str]:
     """
@@ -65,6 +76,7 @@ def main():
     port = 80
     username = "admin"
     password = "140781"
+    motion_cooldown = 10.0  # 10 second cooldown between captures
 
     print("Discovering RTSP URL via ONVIF...")
     rtsp_url = discover_rtsp_uri(host, port, username, password)
@@ -74,23 +86,35 @@ def main():
         for url in candidate_rtsp_uris(host, username, password):
             print(f"Trying {url}")
             cap = open_stream(url)
-            if cap is not None:
-                rtsp_url = url
-                cap.release()
-                break
+            if cap is None:
+                continue
+            rtsp_url = url
+            cap.release()
+            break
 
     if not rtsp_url:
         print("Failed to resolve an RTSP URL. Please verify camera settings/network.")
         return
 
     print(f"Using RTSP URL: {rtsp_url}")
+    print(f"Motion detection: cooldown={motion_cooldown}s")
 
     cap = open_stream(rtsp_url)
     if cap is None:
         print("Could not open stream with OpenCV.")
         return
 
+    # Initialize motion detector
+    motion_detector = create_motion_detector(cooldown_seconds=motion_cooldown)
+    print(f"Motion detector initialized. Saves to: {motion_detector.save_directory}")
+
+    # Setup camera display using utility functions
+    window_name = "ASECAM Stream + Motion Detection"
+    frame_width, frame_height, fps_camera = setup_camera_display(cap, window_name)
+
     prev = time.time()
+    frame_count = 0
+    
     try:
         while True:
             ok, frame = cap.read()
@@ -103,16 +127,52 @@ def main():
                     break
                 continue
 
+            # Ensure we're working with the full frame
+            frame = ensure_full_frame_visible(frame, (frame_width, frame_height))
+
+            # Process motion detection
+            motion_detected, saved_image_path = motion_detector.process_frame(frame)
+            
+            # Get motion status for display
+            motion_status = "Motion Detected!" if motion_detected else "No Motion"
+            motion_cooldown_status = motion_detector.get_cooldown_status()
+
             now = time.time()
             fps = 1.0 / max(1e-6, (now - prev))
             prev = now
-            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            cv2.imshow("ASECAM Stream", frame)
+            frame_count += 1
+            
+            # Draw motion contours if motion was detected
+            if motion_detected:
+                _, motion_mask, contours = motion_detector.detect_motion(frame)
+                frame = draw_motion_contours(frame, contours, motion_detected)
+                
+                # Show capture status
+                if saved_image_path:
+                    print(f"📸 Motion capture saved: {saved_image_path}")
+                else:
+                    print(f"⏰ Motion detected but in cooldown. {motion_cooldown_status} remaining.")
+            
+            # Add comprehensive camera information overlay
+            frame = add_camera_info_overlay(
+                frame, 
+                host, 
+                (frame_width, frame_height), 
+                fps, 
+                0,  # No detections in this simple viewer
+                f"Frame: {frame_count}",
+                motion_status,
+                motion_cooldown_status
+            )
+            
+            # Display the full frame
+            cv2.imshow(window_name, frame)
 
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 break
     finally:
         cap.release()
+        motion_detector.cleanup()
         cv2.destroyAllWindows()
 
 

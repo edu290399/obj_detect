@@ -9,6 +9,17 @@ from onvif import ONVIFCamera
 from urllib.parse import urlparse, urlunparse, quote
 from dotenv import load_dotenv
 
+# Import camera utilities
+from camera_utils import (
+    setup_camera_display,
+    ensure_full_frame_visible,
+    add_camera_info_overlay,
+    draw_motion_contours
+)
+
+# Import motion detection
+from motion_detector import create_motion_detector
+
 # Load environment variables
 load_dotenv('camera_config.env')
 
@@ -224,6 +235,7 @@ def run_camera_detection(
     password: str = None,
     conf_thres: float = None,
     iou_thres: float = None,
+    motion_cooldown: float = 10.0,
 ):
     """Connect to ONVIF camera, perform real-time object detection, and display results."""
     
@@ -238,6 +250,11 @@ def run_camera_detection(
     print(f"Connecting to camera at {host}:{port}")
     print(f"Using credentials: {username}:***")
     print(f"Detection settings: conf={conf_thres}, iou={iou_thres}")
+    print(f"Motion detection: cooldown={motion_cooldown}s")
+    
+    # Initialize motion detector
+    motion_detector = create_motion_detector(cooldown_seconds=motion_cooldown)
+    print(f"Motion detector initialized. Saves to: {motion_detector.save_directory}")
     
     print("Discovering RTSP URL via ONVIF...")
     rtsp_url = discover_rtsp_uri(host, port, username, password)
@@ -263,6 +280,10 @@ def run_camera_detection(
         print("Could not open stream with OpenCV.")
         return
     
+    # Setup camera display using utility functions
+    window_name = "ASECAM Camera - YOLOv5 Detection + Motion"
+    frame_width, frame_height, fps_camera = setup_camera_display(cap, window_name)
+    
     prev_time = time.time()
     frame_count = 0
     
@@ -278,11 +299,32 @@ def run_camera_detection(
                     break
                 continue
             
-            # Perform object detection
+            # Ensure we're working with the full frame
+            frame = ensure_full_frame_visible(frame, (frame_width, frame_height))
+            
+            # Process motion detection
+            motion_detected, saved_image_path = motion_detector.process_frame(frame)
+            
+            # Get motion status for display
+            motion_status = "Motion Detected!" if motion_detected else "No Motion"
+            motion_cooldown_status = motion_detector.get_cooldown_status()
+            
+            # Perform object detection on the full frame
             boxes, labels, scores = infer_image(model, frame, conf_thres, iou_thres)
             
-            # Draw detections on frame
+            # Draw detections on the full frame
             vis = draw_detections(frame, boxes, labels, scores)
+            
+            # Draw motion contours if motion was detected
+            if motion_detected:
+                _, motion_mask, contours = motion_detector.detect_motion(frame)
+                vis = draw_motion_contours(vis, contours, motion_detected)
+                
+                # Show capture status
+                if saved_image_path:
+                    print(f"📸 Motion capture saved: {saved_image_path}")
+                else:
+                    print(f"⏰ Motion detected but in cooldown. {motion_cooldown_status} remaining.")
             
             # FPS and detection count overlay
             now = time.time()
@@ -290,31 +332,20 @@ def run_camera_detection(
             prev_time = now
             frame_count += 1
             
-            # Draw FPS and detection info
-            cv2.putText(
-                vis,
-                f"FPS: {fps:.1f} | Detections: {len(boxes)} | Frame: {frame_count}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-                cv2.LINE_AA,
+            # Add comprehensive camera information overlay
+            vis = add_camera_info_overlay(
+                vis, 
+                host, 
+                (frame_width, frame_height), 
+                fps, 
+                len(boxes),
+                f"Frame: {frame_count}",
+                motion_status,
+                motion_cooldown_status
             )
             
-            # Draw camera info
-            cv2.putText(
-                vis,
-                f"ASECAM 8MP - {host}",
-                (10, vis.shape[0] - 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
-            
-            cv2.imshow("ASECAM Camera - YOLOv5 Detection", vis)
+            # Display the full frame - OpenCV will handle the window sizing
+            cv2.imshow(window_name, vis)
             
             # Exit on 'q'
             if (cv2.waitKey(1) & 0xFF) == ord('q'):
@@ -322,6 +353,7 @@ def run_camera_detection(
                 
     finally:
         cap.release()
+        motion_detector.cleanup()
         cv2.destroyAllWindows()
 
 
@@ -330,8 +362,11 @@ def main():
     model = load_yolov5_model()
     print("Model loaded successfully!")
     
-    print("Starting camera detection...")
-    run_camera_detection(model)
+    print("Starting camera detection with motion capture...")
+    print("Press 'q' to quit")
+    print("Motion captures will be saved automatically with 10-second cooldown")
+    
+    run_camera_detection(model, motion_cooldown=10.0)
 
 
 if __name__ == "__main__":
