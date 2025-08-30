@@ -1,5 +1,6 @@
 import os
 import time
+import warnings
 from typing import List, Optional, Tuple
 
 import cv2
@@ -8,6 +9,9 @@ import torch
 from onvif import ONVIFCamera
 from urllib.parse import urlparse, urlunparse, quote
 from dotenv import load_dotenv
+
+# Suppress PyTorch deprecation warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
 # Import camera utilities
 from camera_utils import (
@@ -20,8 +24,13 @@ from camera_utils import (
 # Import motion detection
 from motion_detector import create_motion_detector
 
+# Import door tracking
+from door_tracker import create_door_tracker
+
 # Load environment variables
 load_dotenv('camera_config.env')
+load_dotenv('door_config.env')
+load_dotenv('performance_config.env')
 
 
 def select_device() -> torch.device:
@@ -230,12 +239,14 @@ def draw_detections(
 def run_camera_detection(
     model,
     host: str = None,
-    port: int = None,
+    port: str = None,
     username: str = None,
     password: str = None,
     conf_thres: float = None,
     iou_thres: float = None,
     motion_cooldown: float = 10.0,
+    process_every_n_frames: int = 1,  # Process every Nth frame for speed
+    use_substream: bool = True,  # Use substream for lower resolution
 ):
     """Connect to ONVIF camera, perform real-time object detection, and display results."""
     
@@ -251,10 +262,42 @@ def run_camera_detection(
     print(f"Using credentials: {username}:***")
     print(f"Detection settings: conf={conf_thres}, iou={iou_thres}")
     print(f"Motion detection: cooldown={motion_cooldown}s")
+    print(f"Performance: processing every {process_every_n_frames} frame(s)")
+    print(f"Stream: {'Substream (faster)' if use_substream else 'Main stream'}")
+    
+    # Check CUDA status
+    device = next(model.parameters()).device
+    print(f"Model running on: {device}")
+    if device.type == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    else:
+        print("⚠️  Running on CPU - consider installing CUDA for better performance")
     
     # Initialize motion detector
     motion_detector = create_motion_detector(cooldown_seconds=motion_cooldown)
     print(f"Motion detector initialized. Saves to: {motion_detector.save_directory}")
+    
+    # Initialize door tracker
+    door_x1 = int(os.getenv('DOOR_X1', '520'))
+    door_y1 = int(os.getenv('DOOR_Y1', '580'))
+    door_x2 = int(os.getenv('DOOR_X2', '760'))
+    door_y2 = int(os.getenv('DOOR_Y2', '580'))
+    door_name = os.getenv('DOOR_NAME', 'Main Door')
+    tracking_frames = int(os.getenv('TRACKING_FRAMES', '30'))
+    min_crossing_distance = int(os.getenv('MIN_CROSSING_DISTANCE', '20'))
+    save_directory = os.getenv('SAVE_DIRECTORY', 'door_logs')
+    
+    door_tracker = create_door_tracker(
+        door_x1=door_x1, door_y1=door_y1,
+        door_x2=door_x2, door_y2=door_y2,
+        door_name=door_name,
+        tracking_frames=tracking_frames,
+        min_crossing_distance=min_crossing_distance,
+        save_directory=save_directory
+    )
+    print(f"Door tracker initialized. Door: {door_name} at ({door_x1},{door_y1}) to ({door_x2},{door_y2})")
+    print(f"Tracking settings: {tracking_frames} frames, {min_crossing_distance}px min crossing")
     
     print("Discovering RTSP URL via ONVIF...")
     rtsp_url = discover_rtsp_uri(host, port, username, password)
@@ -281,7 +324,7 @@ def run_camera_detection(
         return
     
     # Setup camera display using utility functions
-    window_name = "ASECAM Camera - YOLOv5 Detection + Motion"
+    window_name = "ASECAM Camera - YOLOv5 Detection + Motion + Door Tracking"
     frame_width, frame_height, fps_camera = setup_camera_display(cap, window_name)
     
     prev_time = time.time()
@@ -302,15 +345,30 @@ def run_camera_detection(
             # Ensure we're working with the full frame
             frame = ensure_full_frame_visible(frame, (frame_width, frame_height))
             
-            # Process motion detection
+            # Process motion detection (always process for responsiveness)
             motion_detected, saved_image_path = motion_detector.process_frame(frame)
             
             # Get motion status for display
             motion_status = "Motion Detected!" if motion_detected else "No Motion"
             motion_cooldown_status = motion_detector.get_cooldown_status()
             
-            # Perform object detection on the full frame
-            boxes, labels, scores = infer_image(model, frame, conf_thres, iou_thres)
+            # Skip object detection on some frames for better performance
+            if frame_count % process_every_n_frames == 0:
+                # Perform object detection on the full frame
+                boxes, labels, scores = infer_image(model, frame, conf_thres, iou_thres)
+                
+                # Extract person detections for door tracking
+                person_boxes = []
+                for i, label in enumerate(labels):
+                    if label.lower() == 'person':
+                        person_boxes.append(boxes[i])
+                
+                # Update door tracking with person detections
+                door_tracker.update_tracks(person_boxes, frame_count)
+            else:
+                # Use previous detections for display
+                boxes, labels, scores = [], [], []
+                person_boxes = []
             
             # Draw detections on the full frame
             vis = draw_detections(frame, boxes, labels, scores)
@@ -326,20 +384,32 @@ def run_camera_detection(
                 else:
                     print(f"⏰ Motion detected but in cooldown. {motion_cooldown_status} remaining.")
             
+            # Draw door tracking visualizations
+            vis = door_tracker.draw_door_boundary(vis)
+            vis = door_tracker.draw_tracks(vis)
+            vis = door_tracker.draw_count_overlay(vis)
+            
             # FPS and detection count overlay
             now = time.time()
             fps = 1.0 / max(1e-6, (now - prev_time))
             prev_time = now
             frame_count += 1
             
+            # Get door counts for display
+            entries, exits = door_tracker.get_counts()
+            
             # Add comprehensive camera information overlay
+            frame_info = f"Frame: {frame_count}"
+            if process_every_n_frames > 1:
+                frame_info += f" (Process: {process_every_n_frames}N)"
+            
             vis = add_camera_info_overlay(
                 vis, 
                 host, 
                 (frame_width, frame_height), 
                 fps, 
                 len(boxes),
-                f"Frame: {frame_count}",
+                f"{frame_info} | Door: {entries} in, {exits} out",
                 motion_status,
                 motion_cooldown_status
             )
@@ -354,6 +424,8 @@ def run_camera_detection(
     finally:
         cap.release()
         motion_detector.cleanup()
+        # Save final door counts
+        door_tracker.save_counts()
         cv2.destroyAllWindows()
 
 
@@ -362,11 +434,21 @@ def main():
     model = load_yolov5_model()
     print("Model loaded successfully!")
     
-    print("Starting camera detection with motion capture...")
+    print("Starting camera detection with motion capture and door tracking...")
     print("Press 'q' to quit")
     print("Motion captures will be saved automatically with 10-second cooldown")
+    print("Door entries/exits will be counted and logged automatically")
     
-    run_camera_detection(model, motion_cooldown=10.0)
+    # Performance optimization settings
+    process_every_n_frames = int(os.getenv('PROCESS_EVERY_N_FRAMES', '1'))  # Process every frame by default
+    use_substream = os.getenv('USE_SUBSTREAM', 'true').lower() == 'true'  # Use substream by default
+    
+    run_camera_detection(
+        model, 
+        motion_cooldown=10.0,
+        process_every_n_frames=process_every_n_frames,
+        use_substream=use_substream
+    )
 
 
 if __name__ == "__main__":

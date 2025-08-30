@@ -10,6 +10,9 @@ This project provides real-time object detection using a pre-trained YOLOv5 mode
 - **Automatic reconnection** if stream drops
 - **Performance metrics** (FPS, detection count)
 - **GPU acceleration** support (CUDA)
+- **🚪 Door tracking and person counting** with automatic entry/exit detection
+- **📸 Motion detection** with automatic image capture and 10-second cooldown
+- **🎯 Full image visibility** ensuring complete camera feed display
 
 ## Setup
 
@@ -52,18 +55,48 @@ CONFIDENCE_THRESHOLD=0.25
 IOU_THRESHOLD=0.45
 ```
 
-### 3. Run Object Detection
+### 3. Configure Door Boundary (Optional)
+
+If you want to track people entering/leaving your house:
 
 ```bash
+# Interactive door boundary configuration
+python test_door_config.py
+
+# Copy example door config
+cp door_config.env.example door_config.env
+```
+
+### 4. Run Object Detection
+
+```bash
+# Full system with motion detection and door tracking
 python camera_yolo_detection.py
+
+# Simple camera view with motion detection
+python connect_onvif_camera.py
 ```
 
 ## Usage
 
+### Basic Object Detection
 - **Press 'q'** to quit the detection window
 - **FPS display** shows real-time performance
 - **Detection count** shows number of objects detected
 - **Bounding boxes** with labels and confidence scores
+
+### Door Tracking & Person Counting
+- **Automatic counting** of people entering/leaving
+- **Visual door boundary** with cyan line
+- **Person tracking** with green movement paths
+- **Real-time count overlay** showing entries/exits
+- **Event logging** to `door_logs/` directory
+
+### Motion Detection
+- **Automatic capture** when motion is detected
+- **10-second cooldown** between captures
+- **Motion contours** displayed in green
+- **Images saved** to timestamped directories
 
 ## Security Notes
 
@@ -94,6 +127,23 @@ python camera_yolo_detection.py
 1. **Check internet connection** (first run downloads model)
 2. **Verify PyTorch installation**
 3. **Use local .pt file** if network issues persist
+
+## Advanced Features
+
+### Door Tracking System
+- **`door_tracker.py`**: Core door tracking and person counting logic
+- **`test_door_config.py`**: Interactive door boundary configuration tool
+- **`door_config.env.example`**: Configuration template for door settings
+- **`DOOR_TRACKING_README.md`**: Comprehensive door tracking documentation
+
+### Motion Detection System
+- **`motion_detector.py`**: Motion detection with automatic capture
+- **`motion_config.env.example`**: Motion detection configuration
+- **`test_motion_detection.py`**: Motion detection testing script
+
+### Camera Utilities
+- **`camera_utils.py`**: Display management and overlay functions
+- **`test_camera_display.py`**: Camera display testing script
 
 ## File Structure
 
