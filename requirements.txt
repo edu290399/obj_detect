@@ -2,6 +2,8 @@ torch>=1.9
 torchvision>=0.10
 opencv-python>=4.5
 numpy>=1.19
+onvif-zeep>=0.2.12
+python-dotenv>=0.19.0
 
 av>=10.0.0
 djitellopy2>=2.5.0
