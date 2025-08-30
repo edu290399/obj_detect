@@ -19,10 +19,11 @@ load_dotenv('door_config.env')
 
 class DoorConfigurator:
     def __init__(self):
-        self.door_x1 = int(os.getenv('DOOR_X1', '520'))
-        self.door_y1 = int(os.getenv('DOOR_Y1', '580'))
-        self.door_x2 = int(os.getenv('DOOR_X2', '760'))
-        self.door_y2 = int(os.getenv('DOOR_Y2', '580'))
+        # Based on the main door image - line across the bottom of the doorway opening
+        self.door_x1 = int(os.getenv('DOOR_X1', '350'))
+        self.door_y1 = int(os.getenv('DOOR_Y1', '900'))
+        self.door_x2 = int(os.getenv('DOOR_X2', '650'))
+        self.door_y2 = int(os.getenv('DOOR_Y2', '900'))
         self.dragging = False
         self.drag_point = None
         
@@ -32,11 +33,12 @@ class DoorConfigurator:
     def create_test_image(self):
         """Create a test image to visualize the door boundary."""
         # Create a more realistic door view based on ASECAM camera perspective
-        img = np.ones((720, 1280, 3), dtype=np.uint8) * 120  # 720p resolution
+        # Using 1080p resolution to match the new door coordinates
+        img = np.ones((1080, 1280, 3), dtype=np.uint8) * 120  # 1080p resolution
         
         # Draw textured wall (light cream with stucco effect)
         for i in range(0, 1280, 20):
-            for j in range(0, 720, 20):
+            for j in range(0, 1080, 20):
                 color_variation = np.random.randint(-20, 20)
                 wall_color = (120 + color_variation, 120 + color_variation, 100 + color_variation)
                 cv2.rectangle(img, (i, j), (i + 20, j + 20), wall_color, -1)
@@ -67,7 +69,7 @@ class DoorConfigurator:
         
         # Draw tiled floor inside (light tiles)
         for i in range(door_left, door_right, 30):
-            for j in range(door_bottom, 720, 30):
+            for j in range(door_bottom, 1080, 30):
                 tile_color = (180 + np.random.randint(-10, 10), 
                              180 + np.random.randint(-10, 10), 
                              180 + np.random.randint(-10, 10))
@@ -224,10 +226,11 @@ SAVE_DIRECTORY=door_logs
     
     def reset_configuration(self):
         """Reset door boundary to default values."""
-        self.door_x1 = 520
-        self.door_y1 = 580
-        self.door_x2 = 760
-        self.door_y2 = 580
+        # Based on the main door image - line across the bottom of the doorway opening
+        self.door_x1 = 350
+        self.door_y1 = 900
+        self.door_x2 = 650
+        self.door_y2 = 900
         print("🔄 Configuration reset to defaults")
     
     def run(self):

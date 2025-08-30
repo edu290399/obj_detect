@@ -25,7 +25,7 @@ from camera_utils import (
 from motion_detector import create_motion_detector
 
 # Import door tracking
-from door_tracker import create_door_tracker
+from smart_door_detector import create_smart_door_detector
 
 # Load environment variables
 load_dotenv('camera_config.env')
@@ -278,26 +278,12 @@ def run_camera_detection(
     motion_detector = create_motion_detector(cooldown_seconds=motion_cooldown)
     print(f"Motion detector initialized. Saves to: {motion_detector.save_directory}")
     
-    # Initialize door tracker
-    door_x1 = int(os.getenv('DOOR_X1', '520'))
-    door_y1 = int(os.getenv('DOOR_Y1', '580'))
-    door_x2 = int(os.getenv('DOOR_X2', '760'))
-    door_y2 = int(os.getenv('DOOR_Y2', '580'))
-    door_name = os.getenv('DOOR_NAME', 'Main Door')
-    tracking_frames = int(os.getenv('TRACKING_FRAMES', '30'))
-    min_crossing_distance = int(os.getenv('MIN_CROSSING_DISTANCE', '20'))
+    # Initialize smart door detector (automatically detects doors)
     save_directory = os.getenv('SAVE_DIRECTORY', 'door_logs')
     
-    door_tracker = create_door_tracker(
-        door_x1=door_x1, door_y1=door_y1,
-        door_x2=door_x2, door_y2=door_y2,
-        door_name=door_name,
-        tracking_frames=tracking_frames,
-        min_crossing_distance=min_crossing_distance,
-        save_directory=save_directory
-    )
-    print(f"Door tracker initialized. Door: {door_name} at ({door_x1},{door_y1}) to ({door_x2},{door_y2})")
-    print(f"Tracking settings: {tracking_frames} frames, {min_crossing_distance}px min crossing")
+    smart_door_detector = create_smart_door_detector(save_directory=save_directory)
+    print(f"Smart door detector initialized. Will automatically detect doors and track person motion.")
+    print(f"Save directory: {save_directory}")
     
     print("Discovering RTSP URL via ONVIF...")
     rtsp_url = discover_rtsp_uri(host, port, username, password)
@@ -324,7 +310,7 @@ def run_camera_detection(
         return
     
     # Setup camera display using utility functions
-    window_name = "ASECAM Camera - YOLOv5 Detection + Motion + Door Tracking"
+    window_name = "ASECAM Camera - YOLOv5 Detection + Motion + Smart Door Detection"
     frame_width, frame_height, fps_camera = setup_camera_display(cap, window_name)
     
     prev_time = time.time()
@@ -363,8 +349,8 @@ def run_camera_detection(
                     if label.lower() == 'person':
                         person_boxes.append(boxes[i])
                 
-                # Update door tracking with person detections
-                door_tracker.update_tracks(person_boxes, frame_count)
+                # Update smart door tracking with person detections
+                smart_door_detector.update_tracks(person_boxes, frame)
             else:
                 # Use previous detections for display
                 boxes, labels, scores = [], [], []
@@ -385,9 +371,9 @@ def run_camera_detection(
                     print(f"⏰ Motion detected but in cooldown. {motion_cooldown_status} remaining.")
             
             # Draw door tracking visualizations
-            vis = door_tracker.draw_door_boundary(vis)
-            vis = door_tracker.draw_tracks(vis)
-            vis = door_tracker.draw_count_overlay(vis)
+            vis = smart_door_detector.draw_door_boundaries(vis)
+            vis = smart_door_detector.draw_person_tracks(vis)
+            vis = smart_door_detector.draw_count_overlay(vis)
             
             # FPS and detection count overlay
             now = time.time()
@@ -396,7 +382,8 @@ def run_camera_detection(
             frame_count += 1
             
             # Get door counts for display
-            entries, exits = door_tracker.get_counts()
+            door_stats = smart_door_detector.get_stats()
+            entries, exits = door_stats['entries'], door_stats['exits']
             
             # Add comprehensive camera information overlay
             frame_info = f"Frame: {frame_count}"
@@ -425,7 +412,7 @@ def run_camera_detection(
         cap.release()
         motion_detector.cleanup()
         # Save final door counts
-        door_tracker.save_counts()
+        smart_door_detector.save_counts()
         cv2.destroyAllWindows()
 
 
@@ -434,10 +421,11 @@ def main():
     model = load_yolov5_model()
     print("Model loaded successfully!")
     
-    print("Starting camera detection with motion capture and door tracking...")
+    print("Starting camera detection with motion capture and SMART door detection...")
     print("Press 'q' to quit")
     print("Motion captures will be saved automatically with 10-second cooldown")
-    print("Door entries/exits will be counted and logged automatically")
+    print("Doors will be detected automatically using computer vision")
+    print("Person entries/exits will be counted based on orientation (back view = entering, front view = exiting)")
     
     # Performance optimization settings
     process_every_n_frames = int(os.getenv('PROCESS_EVERY_N_FRAMES', '1'))  # Process every frame by default
